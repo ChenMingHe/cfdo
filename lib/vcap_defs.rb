@@ -15,7 +15,7 @@ DEPLOYMENT_PROFILE_FILE_NAME = File.expand_path(File.join(ENV["HOME"], ".cloudfo
 DEPLOYMENT_LOCAL_RUN_PROFILE_FILE_NAME = File.expand_path(File.join(ENV["HOME"], ".cloudfoundry_deployment_local"))
 
 class Deployment
-  class << self
+  class << self # 指明为一个单态类
     def get_cloudfoundry_home
       File.expand_path(File.join(ENV["HOME"], "cloudfoundry"))
     end

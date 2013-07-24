@@ -106,6 +106,10 @@ module Run
     stop(args)
     start(args)
   end
+   
+  def self.env(args)
+    Deployment.
+  end
 
   def self.reset(args)
     unless $noprompt
