@@ -56,20 +56,23 @@ end
 command = ARGV[0] ? ARGV.shift.downcase : nil
 
 # 检查是否支持该命令
+# Manage Command:
 # start       ：启动组件
 # stop        : 停止组件
 # restart     : 重启组件
 # tail        : 查看组件日志
 # status      : 查看组件状态
+# Checking Command:
 # list        : 列举所有组件
 # env         : 查看系统环境
-# target      : 设置目标环境
-# set         : 设置系统参数
-# show-config : 显示组件配置
-# config      : 配置组件参数
-# install     : 安装组件
 # services    : 查看服务种类
 # instances   : 查看特定服务中实例列表
+# show-config : 显示组件配置
+# Config Tools Command:
+# target      : 设置目标环境
+# set         : 设置系统参数
+# config      : 配置组件参数
+# install     : 安装组件
 if command.nil? || !%w[start stop restart tail status list  env target set show-config config install services instances].include?(command)
   STDERR.puts USAGE_MSG 
     exit 1
@@ -94,7 +97,7 @@ end
 vcap_components["components"] &= ARGV unless ARGV.empty?
 
 # 检查当前目录下是否存在vcap脚本，因为所有命令的执行都在里面保存着
-unless File.exists?(File.join(File.dirname(__FILE__), "vcap"))
+unless File.exists?(File.join(File.dirname(__FILE__), "vcap_run"))
   puts "Cannot find vcap repo. Please specify the deployment name or the deployment home directory where to find the config file"
   exit 1
 end
@@ -109,7 +112,6 @@ if vcap_components["components"].include?("services_redis")
 end
 
 if vcap_components["components"].include?("cloud_controller")
-  puts "Setting up cloud controller environment"
   ENV["CLOUD_CONTROLLER_CONFIG"]=File.join(deployment_config_path, "cloud_controller.yml")
   ENV["RAILS_ENV"]="production"
 
@@ -125,7 +127,6 @@ if vcap_components["components"].include?("stager")
 end
 
 if vcap_components["components"].include?("uaa")
-  puts "Setting up the uaa environment"
   ENV["CLOUD_CONTROLLER_CONFIG_PATH"]=deployment_config_path
   ENV["UAA_TOMCAT"]=File.join(deployment_config_path, "../deploy/uaa-tomcat/")
 end
@@ -138,6 +139,7 @@ end
 
 def exec_cmd(cmd)
   id = fork {
+    p cmd
     exec(cmd)
   }
   pid, status = Process.waitpid2(id)
@@ -146,7 +148,6 @@ end
 
 ruby_binary = File.join(ruby_bin_dir, "ruby")
 vcap_home = File.join(deployment_info["cloudfoundry_home"], "vcap")
-vcap_launch = File.join(script_dir, "vcap")
+vcap_launch = File.join(script_dir, "vcap_run")
 
-#puts "Using cloudfoundry config from #{deployment_config_path}"
 exec_cmd("#{ruby_binary} #{vcap_launch} #{command} #{vcap_components["components"].join(" ")} -c #{deployment_config_path} -v #{vcap_home} -l #{deployment_info["deployment_log_path"]}")
