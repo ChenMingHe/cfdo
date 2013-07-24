@@ -1,0 +1,152 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'erb'
+require 'json'
+require 'fileutils'
+require 'optparse'
+require File.expand_path(File.join("..", "lib", "vcap_defs"), File.dirname(__FILE__))
+
+script_dir = File.expand_path(File.dirname(__FILE__))
+
+# TODO: Once we integrate better with bin/vcap, this option parsing should
+# become more robust
+USAGE_MSG = 
+"
+Usage : cfdo <command> [arguments]
+Component Manage :
+    start [component_name]     : start a component name by [component_name]
+                                 otherwise start all component
+                                 use 'list' to get all available component
+
+    stop [component_name]      : stop a component name by [component_name]
+                                 otherwise stop all component
+                                 use 'list' to get all available component
+
+    restart [component_name]   : restart a component name by [component_name]
+                                 otherwise restart all component
+                                 use 'list' to get all available component
+
+    status [component_name]    : show status of a component name by [component_name]
+                                 otherwise start all component
+                                 use 'list' to get all available component
+
+    tail <component_name>      : show log of a component name by [component_name]
+                                 use 'list' to get all available component
+   
+    list                       : show all avaliable component
+
+
+"
+options = {}
+opts = OptionParser.new do |opts|
+  opts.banner = USAGE_MSG
+end
+opts.order!(ARGV)
+
+# 获取
+options["name"], options["home"] = Deployment.get_deployment_target if options.empty?
+
+# 设置部署的名称，一般不为空
+if options["name"].nil?
+  options["name"] = DEPLOYMENT_DEFAULT_NAME
+end
+
+# 获取命令
+command = ARGV[0] ? ARGV.shift.downcase : nil
+
+# 检查是否支持该命令
+# start       ：启动组件
+# stop        : 停止组件
+# restart     : 重启组件
+# tail        : 查看组件日志
+# status      : 查看组件状态
+# list        : 列举所有组件
+# env         : 查看系统环境
+# target      : 设置目标环境
+# set         : 设置系统参数
+# show-config : 显示组件配置
+# config      : 配置组件参数
+# install     : 安装组件
+# services    : 查看服务种类
+# instances   : 查看特定服务中实例列表
+if command.nil? || !%w[start stop restart tail status list  env target set show-config config install services instances].include?(command)
+  STDERR.puts USAGE_MSG 
+    exit 1
+end
+
+deployment_config_path = Deployment.get_config_path(options["name"], options["home"])
+
+begin
+  vcap_components = JSON.parse(File.read(Deployment.get_vcap_config_file(deployment_config_path)))
+  deployment_info = JSON.parse(File.read(Deployment.get_deployment_info_file(deployment_config_path)))
+rescue => e
+  STDERR.puts "#{e.inspect}. Could not parse deployment config files - #{deployment_config_path} . Please check your deployment. "
+  exit 1
+end
+
+# 确定需要传入的组件名称 
+if !ARGV.empty? and (vcap_components["components"] & ARGV).empty?
+  #TODO : 在这里添加对组件的支持
+  STDERR.puts "The component(s) specified on the command line are unknown.\nPlease specify one or more of (#{vcap_components['components'].join(' ')})"
+  exit 1
+end
+vcap_components["components"] &= ARGV unless ARGV.empty?
+
+# 检查当前目录下是否存在vcap脚本，因为所有命令的执行都在里面保存着
+unless File.exists?(File.join(File.dirname(__FILE__), "vcap"))
+  puts "Cannot find vcap repo. Please specify the deployment name or the deployment home directory where to find the config file"
+  exit 1
+end
+
+ruby_bin_dir = deployment_info["ruby_bin_dir"]
+maven_bin_dir = deployment_info["maven_bin_dir"]
+gemdir = `#{File.join(ruby_bin_dir, "gem")} environment gemdir`.split("\n")[0]
+ENV["PATH"] = "#{ruby_bin_dir}:#{File.join(gemdir, "bin")}:#{maven_bin_dir}:#{ENV["PATH"]}"
+
+if vcap_components["components"].include?("services_redis")
+  vcap_components["components"].unshift(vcap_components["components"].delete("services_redis"))
+end
+
+if vcap_components["components"].include?("cloud_controller")
+  puts "Setting up cloud controller environment"
+  ENV["CLOUD_CONTROLLER_CONFIG"]=File.join(deployment_config_path, "cloud_controller.yml")
+  ENV["RAILS_ENV"]="production"
+
+  # Start the cloud controller component first as other components like the
+  # health manager depend on it. Specifically, the health manager uses the same
+  # database as the one used by the cloud controller.
+  vcap_components["components"].unshift(vcap_components["components"].delete("cloud_controller"))
+end
+
+if vcap_components["components"].include?("stager")
+  ENV["PLATFORM_CONFIG"]=File.join(deployment_config_path, "platform.yml")
+  ENV["PATH"] = "#{deployment_info["node_bin_dir"]}:#{ENV["PATH"]}"
+end
+
+if vcap_components["components"].include?("uaa")
+  puts "Setting up the uaa environment"
+  ENV["CLOUD_CONTROLLER_CONFIG_PATH"]=deployment_config_path
+  ENV["UAA_TOMCAT"]=File.join(deployment_config_path, "../deploy/uaa-tomcat/")
+end
+
+# Set both http_proxy and HTTP_PROXY
+%w(http_proxy https_proxy no_proxy).each do |var|
+  ENV[var] = ENV[var] || ENV[var.upcase] unless ENV[var.upcase].nil?
+  ENV[var.upcase] = ENV[var.upcase] || ENV[var] unless ENV[var].nil?
+end
+
+def exec_cmd(cmd)
+  id = fork {
+    exec(cmd)
+  }
+  pid, status = Process.waitpid2(id)
+  status.exitstatus
+end
+
+ruby_binary = File.join(ruby_bin_dir, "ruby")
+vcap_home = File.join(deployment_info["cloudfoundry_home"], "vcap")
+vcap_launch = File.join(script_dir, "vcap")
+
+#puts "Using cloudfoundry config from #{deployment_config_path}"
+exec_cmd("#{ruby_binary} #{vcap_launch} #{command} #{vcap_components["components"].join(" ")} -c #{deployment_config_path} -v #{vcap_home} -l #{deployment_info["deployment_log_path"]}")
